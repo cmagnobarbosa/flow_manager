@@ -322,7 +322,6 @@ class TestMain(TestCase):
                       "flow": {'flow_1': 'data'}
                       }]
         serializer = MagicMock()
-        serializer.flow.cookie.return_value = 0
 
         mock_flow_factory.return_value = serializer
         self.napp.stored_flows = {dpid: {"flow_list": flow_list}}
@@ -365,20 +364,18 @@ class TestMain(TestCase):
         This test checks the case when a flow is missing in storehouse.
         """
         (mock_flow_factory, mock_install_flows) = args
-        cookie_exception_interval = [(0x2b00000000000011, 0x2b000000000000ff)]
-        self.napp.cookie_exception_range = cookie_exception_interval
         dpid = "00:00:00:00:00:00:00:01"
         switch = get_switch_mock(dpid, 0x04)
+
         flow_1 = MagicMock()
-        flow_1.cookie = 0x2b00000000000010
-        flow_1.as_dict.return_value = {'flow_1': 'data', 'cookie': 1}
+        flow_1.as_dict.return_value = {'flow_1': 'data'}
 
         switch.flows = [flow_1]
 
         flow_list = [{"command": "add",
-                      "flow": {'flow_2': 'data', 'cookie': 1}
+                      "flow": {'flow_2': 'data'}
                       }]
-        serializer = flow_1
+        serializer = MagicMock()
 
         mock_flow_factory.return_value = serializer
         self.napp.stored_flows = {dpid: {"flow_list": flow_list}}
@@ -387,56 +384,189 @@ class TestMain(TestCase):
 
     @patch('napps.kytos.flow_manager.main.Main._install_flows')
     @patch('napps.kytos.flow_manager.main.FlowFactory.get_class')
-    def test_consistency_cookie_exception_range(self, *args):
-        """Test the consistency `cookie` exception range."""
-        (mock_flow_factory, mock_install_flows) = args
+    @patch("napps.kytos.flow_manager.main.StoreHouse.save_flow")
+    def test_no_strict_delete(self, *args):
+        """Test the non-strict matching method.
+
+        Test non-strict matching to delete a Flow using a cookie.
+        """
+        (mock_save_flow, _, _) = args
         dpid = "00:00:00:00:00:00:00:01"
         switch = get_switch_mock(dpid, 0x04)
-        cookie_exception_interval = [(0x2b00000000000011,
-                                      0x2b000000000000ff), 0x2b00000000000100]
-        self.napp.cookie_exception_range = cookie_exception_interval
-        flow = MagicMock()
-        expected = [
-                    {'cookie': 0x2b00000000000010, 'called': 1},
-                    {'cookie': 0x2b00000000000013, 'called': 0},
-                    {'cookie': 0x2b00000000000100, 'called': 0},
-                    {'cookie': 0x2b00000000000101, 'called': 1}]
-        # ignored flow
-        for i in expected:
-            mock_install_flows.call_count = 0
-            cookie = i['cookie']
-            called = i['called']
-            flow.cookie = cookie
-            flow.as_dict.return_value = {'flow_1': 'data', 'cookie': cookie}
-            switch.flows = [flow]
-            mock_flow_factory.return_value = flow
-            self.napp.stored_flows = {dpid: {"flow_list": flow}}
-            self.napp.check_storehouse_consistency(switch)
-            self.assertEqual(mock_install_flows.call_count, called)
+        switch.id = dpid
+        stored_flow = {
+            "command": "add",
+            "flow": {
+                "actions": [{"action_type": "set_vlan", "vlan_id": 300}],
+                "cookie": 6191162389751548793,
+                "match": {"dl_vlan": 300, "in_port": 1},
+            },
+        }
+        stored_flow2 = {
+            "command": "add",
+            "flow": {
+                "actions": [],
+                "cookie": 4961162389751548787,
+                "match": {"in_port": 2},
+            },
+        }
+        flow_to_install = {
+            "cookie": 6191162389751548793,
+            "cookie_mask": 18446744073709551615,
+        }
+        flow_list = {"flow_list": [stored_flow, stored_flow2]}
+        command = "delete"
+        self.napp.stored_flows = {dpid: flow_list}
+
+        self.napp._store_changed_flows(command, flow_to_install, switch)
+        mock_save_flow.assert_called()
+        self.assertEqual(len(self.napp.stored_flows), 1)
 
     @patch('napps.kytos.flow_manager.main.Main._install_flows')
     @patch('napps.kytos.flow_manager.main.FlowFactory.get_class')
-    def test_consistency_table_id_exception_range(self, *args):
-        """Test the consistency `table_id` exception range."""
-        (mock_flow_factory, mock_install_flows) = args
+    @patch("napps.kytos.flow_manager.main.StoreHouse.save_flow")
+    def test_no_strict_delete_with_ipv4(self, *args):
+        """Test the non-strict matching method.
+
+        Test non-strict matching to delete a Flow using IPv4.
+        """
+        (mock_save_flow, _, _) = args
         dpid = "00:00:00:00:00:00:00:01"
         switch = get_switch_mock(dpid, 0x04)
-        table_id_exception_interval = [(1, 2), 3]
-        self.napp.tab_id_exception_range = table_id_exception_interval
-        flow = MagicMock()
-        expected = [
-                    {'table_id': 0, 'called': 1},
-                    {'table_id': 3, 'called': 0},
-                    {'table_id': 4, 'called': 1}]
-        # ignored flow
-        for i in expected:
-            table_id = i['table_id']
-            called = i['called']
-            mock_install_flows.call_count = 0
-            flow.table_id = table_id
-            flow.as_dict.return_value = {'flow_1': 'data', 'cookie': table_id}
-            switch.flows = [flow]
-            mock_flow_factory.return_value = flow
-            self.napp.stored_flows = {dpid: {"flow_list": flow}}
-            self.napp.check_storehouse_consistency(switch)
-            self.assertEqual(mock_install_flows.call_count, called)
+        switch.id = dpid
+        stored_flow = {
+            "command": "add",
+            "flow": {
+                "priority": 10,
+                "cookie": 84114904,
+                "match": {
+                    "ipv4_src": "192.168.1.120",
+                    "ipv4_dst": "192.168.0.2",
+                },
+                "actions": [],
+            },
+        }
+        stored_flow2 = {
+            "command": "add",
+            "flow": {
+                "actions": [],
+                "cookie": 4961162389751548787,
+                "match": {"in_port": 2},
+            },
+        }
+        flow_to_install = {"match": {"ipv4_src": '192.168.1.1/24'}}
+        flow_list = {"flow_list": [stored_flow, stored_flow2]}
+        command = "delete"
+        self.napp.stored_flows = {dpid: flow_list}
+
+        self.napp._store_changed_flows(command, flow_to_install, switch)
+        mock_save_flow.assert_called()
+        self.assertEqual(len(self.napp.stored_flows[dpid]['flow_list']), 2)
+
+    @patch('napps.kytos.flow_manager.main.Main._install_flows')
+    @patch('napps.kytos.flow_manager.main.FlowFactory.get_class')
+    @patch("napps.kytos.flow_manager.main.StoreHouse.save_flow")
+    def test_no_strict_delete_with_ipv4_fail(self, *args):
+        """Test the non-strict matching method.
+
+        Test non-strict Fail case matching to delete a Flow using IPv4.
+        """
+        (mock_save_flow, _, _) = args
+        dpid = "00:00:00:00:00:00:00:01"
+        switch = get_switch_mock(dpid, 0x04)
+        switch.id = dpid
+        stored_flow = {
+            "command": "add",
+            "flow": {
+                "priority": 10,
+                "cookie": 84114904,
+                "match": {
+                    "ipv4_src": "192.168.2.1",
+                    "ipv4_dst": "192.168.0.2",
+                },
+                "actions": [],
+            },
+        }
+        stored_flow2 = {
+            "command": "add",
+            "flow": {
+                "actions": [],
+                "cookie": 4961162389751548787,
+                "match": {"in_port": 2},
+            },
+        }
+        flow_to_install = {"match": {"ipv4_src": '192.168.1.1/24'}}
+        flow_list = {"flow_list": [stored_flow, stored_flow2]}
+        command = "delete"
+        self.napp.stored_flows = {dpid: flow_list}
+
+        self.napp._store_changed_flows(command, flow_to_install, switch)
+        mock_save_flow.assert_called()
+        self.assertEqual(len(self.napp.stored_flows[dpid]['flow_list']), 3)
+
+    @patch('napps.kytos.flow_manager.main.Main._install_flows')
+    @patch('napps.kytos.flow_manager.main.FlowFactory.get_class')
+    @patch("napps.kytos.flow_manager.main.StoreHouse.save_flow")
+    def test_no_strict_delete_of10(self, *args):
+        """Test the non-strict matching method.
+
+        Test non-strict matching to delete a Flow using OF10.
+        """
+        (mock_save_flow, _, _) = args
+        dpid = "00:00:00:00:00:00:00:01"
+        switch = get_switch_mock(dpid, 0x01)
+        switch.id = dpid
+        stored_flow = {
+            "command": "add",
+            "flow": {
+                "actions": [{"max_len": 65535, "port": 6}],
+                "cookie": 4961162389751548787,
+                "match": {
+                    "in_port": 80,
+                    "dl_src": "00:00:00:00:00:00",
+                    "dl_dst": "f2:0b:a4:7d:f8:ea",
+                    "dl_vlan": 0,
+                    "dl_vlan_pcp": 0,
+                    "dl_type": 0,
+                    "nw_tos": 0,
+                    "nw_proto": 0,
+                    "nw_src": "192.168.0.1",
+                    "nw_dst": "0.0.0.0",
+                    "tp_src": 0,
+                    "tp_dst": 0,
+                },
+                "out_port": 65532,
+                "priority": 123,
+            },
+        }
+        stored_flow2 = {
+            "command": "add",
+            "flow": {
+                "actions": [],
+                "cookie": 4961162389751654,
+                "match": {
+                    "in_port": 2,
+                    "dl_src": "00:00:00:00:00:00",
+                    "dl_dst": "f2:0b:a4:7d:f8:ea",
+                    "dl_vlan": 0,
+                    "dl_vlan_pcp": 0,
+                    "dl_type": 0,
+                    "nw_tos": 0,
+                    "nw_proto": 0,
+                    "nw_src": "192.168.0.1",
+                    "nw_dst": "0.0.0.0",
+                    "tp_src": 0,
+                    "tp_dst": 0,
+                },
+                "out_port": 655,
+                "priority": 1,
+            },
+        }
+        flow_to_install = {"match": {"in_port": 80, "wildcards": 4194303}}
+        flow_list = {"flow_list": [stored_flow, stored_flow2]}
+        command = "delete"
+        self.napp.stored_flows = {dpid: flow_list}
+
+        self.napp._store_changed_flows(command, flow_to_install, switch)
+        mock_save_flow.assert_called()
+        self.assertEqual(len(self.napp.stored_flows[dpid]['flow_list']), 1)
